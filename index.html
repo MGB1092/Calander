@@ -166,6 +166,22 @@
     }
     .day-cell.other-month .holiday-label { color: #e8a0a0; }
 
+    /* SYNC INDICATOR */
+    .sync-badge {
+      font-size: 10px;
+      color: var(--mint);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-weight: 500;
+    }
+    .sync-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--mint);
+    }
+    .sync-dot.offline { background: var(--gray-3); }
+
     /* EVENT DOTS */
     .event-dots {
       display: flex;
@@ -429,6 +445,32 @@
       background: rgba(255,255,255,0.6);
     }
   </style>
+  <!-- Firebase SDK -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getDatabase, ref, push, remove, onValue, set } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBrzd-J4rFACVwpigBuYp0eqapmk2MKm2k",
+      authDomain: "calander-2c4b8.firebaseapp.com",
+      databaseURL: "https://calander-2c4b8-default-rtdb.firebaseio.com/",
+      projectId: "calander-2c4b8",
+      storageBucket: "calander-2c4b8.firebasestorage.app",
+      messagingSenderId: "236637654571",
+      appId: "1:236637654571:web:427c587b20cfefb1d2e46e",
+      measurementId: "G-ZT8E4JMXRZ"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    const eventsRef = ref(db, 'events');
+
+    // 전역에 노출 (일반 script 태그에서 사용하기 위함)
+    window.__firebase = {
+      db, eventsRef, push, remove, onValue, set,
+      refChild: (path) => ref(db, path)
+    };
+  </script>
 </head>
 <body>
 
@@ -436,6 +478,10 @@
   <div class="header-top">
     <div class="app-title">함께<span>캘린더</span></div>
     <button class="share-btn" onclick="copyLink()">🔗 링크 공유</button>
+  </div>
+  <div class="sync-badge" id="syncBadge" style="margin-bottom:10px;">
+    <div class="sync-dot offline" id="syncDot"></div>
+    <span id="syncText">연결 중...</span>
   </div>
   <div class="month-nav">
     <button class="nav-btn" onclick="changeMonth(-1)">‹</button>
@@ -524,19 +570,47 @@
   let currentYear, currentMonth;
   let selectedDate = null;
   let events = [];
+  let firebaseReady = false;
 
-  const STORAGE_KEY = 'shared_calendar_v1';
-
-  function loadEvents() {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) events = JSON.parse(raw);
-    } catch(e) { events = []; }
+  // ── Firebase 실시간 동기화 ──────────────────────────────
+  function setupFirebaseSync() {
+    const fb = window.__firebase;
+    if (!fb) {
+      setSyncStatus(false, '동기화 불가');
+      return;
+    }
+    fb.onValue(fb.eventsRef, (snapshot) => {
+      const data = snapshot.val();
+      events = data ? Object.entries(data).map(([id, ev]) => ({ id, ...ev })) : [];
+      firebaseReady = true;
+      setSyncStatus(true, '실시간 동기화 중');
+      render();
+    }, (error) => {
+      console.error('Firebase sync error:', error);
+      setSyncStatus(false, '연결 실패');
+    });
   }
 
-  function saveEvents() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(events));
+  function setSyncStatus(online, text) {
+    const dot = document.getElementById('syncDot');
+    const label = document.getElementById('syncText');
+    if (!dot || !label) return;
+    dot.classList.toggle('offline', !online);
+    label.textContent = text;
   }
+
+  function addEventToFirebase(ev) {
+    const fb = window.__firebase;
+    if (!fb) return;
+    fb.push(fb.eventsRef, ev);
+  }
+
+  function removeEventFromFirebase(id) {
+    const fb = window.__firebase;
+    if (!fb || !fb.refChild) return;
+    fb.remove(fb.refChild('events/' + id));
+  }
+  // ────────────────────────────────────────────────────────
 
   // ── 한국 공휴일 ──────────────────────────────────────────
   // 고정 공휴일 (MM-DD)
@@ -575,7 +649,6 @@
   // ────────────────────────────────────────────────────────
 
   function init() {
-    loadEvents();
     const now = new Date();
     currentYear = now.getFullYear();
     currentMonth = now.getMonth();
@@ -583,6 +656,9 @@
     buildColorPicker();
     document.getElementById('inputDate').value = selectedDate;
     render();
+
+    // Firebase 모듈 스크립트가 로드될 때까지 약간의 지연 후 동기화 시작
+    setTimeout(setupFirebaseSync, 300);
   }
 
   function formatDate(d) {
@@ -833,18 +909,15 @@
     if (!date) { showToast('날짜를 선택해주세요'); return; }
 
     const ev = {
-      id: Date.now().toString(),
       name, title, date, time, desc,
       color: selectedColor
     };
-    events.push(ev);
-    saveEvents();
+    addEventToFirebase(ev);
     closeModal();
     selectedDate = date;
     const d = new Date(date + 'T00:00:00');
     currentYear = d.getFullYear();
     currentMonth = d.getMonth();
-    render();
     showToast('✅ 일정이 추가됐어요!');
     document.getElementById('inputTitle').value = '';
     document.getElementById('inputTime').value = '';
@@ -852,9 +925,7 @@
   }
 
   function deleteEvent(id) {
-    events = events.filter(e => e.id !== id);
-    saveEvents();
-    render();
+    removeEventFromFirebase(id);
     showToast('일정이 삭제됐어요');
   }
 
