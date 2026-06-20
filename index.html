@@ -500,6 +500,21 @@
     }
     .submit-btn:active { opacity: 0.85; }
 
+    .modal-delete-btn {
+      width: 100%;
+      background: none;
+      color: var(--rose);
+      border: none;
+      padding: 14px;
+      font-size: 14px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      margin-top: 4px;
+      letter-spacing: 0.2px;
+    }
+    .modal-delete-btn:active { opacity: 0.6; }
+
     /* TOAST */
     .toast {
       position: fixed;
@@ -668,6 +683,7 @@
     </div>
 
     <button class="submit-btn" onclick="addEvent()">일정 추가하기</button>
+    <button class="modal-delete-btn" id="modalDeleteBtn" onclick="deleteEventFromModal()" style="display:none;">🗑 이 일정 삭제하기</button>
   </div>
 </div>
 
@@ -690,6 +706,7 @@
   let selectedDate = null;
   let events = [];
   let firebaseReady = false;
+  let editingEventId = null; // null이면 추가 모드, 값이 있으면 수정 모드
 
   // ── Firebase 실시간 동기화 ──────────────────────────────
   function setupFirebaseSync() {
@@ -728,6 +745,12 @@
     const fb = window.__firebase;
     if (!fb || !fb.refChild) return;
     fb.remove(fb.refChild('events/' + id));
+  }
+
+  function updateEventInFirebase(id, ev) {
+    const fb = window.__firebase;
+    if (!fb || !fb.refChild) return;
+    fb.set(fb.refChild('events/' + id), ev);
   }
   // ────────────────────────────────────────────────────────
 
@@ -1112,19 +1135,57 @@
           </div>
           ${ev.desc ? `<div class="event-desc">${ev.desc}</div>` : ''}
         </div>
-        <button class="event-delete" onclick="deleteEvent('${ev.id}')">×</button>
+        <button class="event-delete" onclick="event.stopPropagation(); deleteEvent('${ev.id}')">×</button>
       `;
+      card.onclick = () => openModal(ev.id);
       list.appendChild(card);
     });
   }
 
-  function openModal() {
+  function openModal(eventId) {
+    const modalTitle = document.querySelector('.modal-title');
+    const submitBtn = document.querySelector('.submit-btn');
+    const deleteBtnInModal = document.getElementById('modalDeleteBtn');
+
+    if (eventId) {
+      // 수정 모드: 기존 데이터로 폼 채우기
+      const ev = events.find(e => e.id === eventId);
+      if (!ev) return;
+      editingEventId = eventId;
+      document.getElementById('inputName').value = ev.name || '';
+      document.getElementById('inputTitle').value = ev.title || '';
+      document.getElementById('inputDate').value = ev.date || '';
+      document.getElementById('inputEndDate').value = ev.endDate || '';
+      document.getElementById('inputTime').value = ev.time || '';
+      document.getElementById('inputDesc').value = ev.desc || '';
+      selectedColor = ev.color || COLORS[0].hex;
+      buildColorPicker();
+      modalTitle.textContent = '✏️ 일정 수정';
+      submitBtn.textContent = '수정 완료';
+      if (deleteBtnInModal) deleteBtnInModal.style.display = 'block';
+    } else {
+      // 추가 모드: 폼 초기화
+      editingEventId = null;
+      document.getElementById('inputName').value = '';
+      document.getElementById('inputTitle').value = '';
+      document.getElementById('inputDate').value = selectedDate || formatDate(new Date());
+      document.getElementById('inputEndDate').value = '';
+      document.getElementById('inputTime').value = '';
+      document.getElementById('inputDesc').value = '';
+      selectedColor = COLORS[0].hex;
+      buildColorPicker();
+      modalTitle.textContent = '📅 일정 추가';
+      submitBtn.textContent = '일정 추가하기';
+      if (deleteBtnInModal) deleteBtnInModal.style.display = 'none';
+    }
+
     document.getElementById('modalOverlay').classList.add('open');
     setTimeout(() => document.getElementById('inputName').focus(), 300);
   }
 
   function closeModal() {
     document.getElementById('modalOverlay').classList.remove('open');
+    editingEventId = null;
   }
 
   function handleOverlayClick(e) {
@@ -1150,13 +1211,20 @@
       color: selectedColor
     };
     if (endDate) ev.endDate = endDate;
-    addEventToFirebase(ev);
+
+    if (editingEventId) {
+      updateEventInFirebase(editingEventId, ev);
+      showToast('✅ 일정이 수정됐어요!');
+    } else {
+      addEventToFirebase(ev);
+      showToast('✅ 일정이 추가됐어요!');
+    }
+
     closeModal();
     selectedDate = date;
     const d = new Date(date + 'T00:00:00');
     currentYear = d.getFullYear();
     currentMonth = d.getMonth();
-    showToast('✅ 일정이 추가됐어요!');
     document.getElementById('inputTitle').value = '';
     document.getElementById('inputEndDate').value = '';
     document.getElementById('inputTime').value = '';
@@ -1166,6 +1234,13 @@
   function deleteEvent(id) {
     removeEventFromFirebase(id);
     showToast('일정이 삭제됐어요');
+  }
+
+  function deleteEventFromModal() {
+    if (!editingEventId) return;
+    removeEventFromFirebase(editingEventId);
+    showToast('일정이 삭제됐어요');
+    closeModal();
   }
 
   function copyLink() {
